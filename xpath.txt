@@ -1,0 +1,3 @@
+.//li[contains(@class, 'level3 nav')]
+.//li[contains(@class, 'level2 nav') and count(*) = 1]
+.//li[contains(@class, 'level1 nav') and count(*) = 1]

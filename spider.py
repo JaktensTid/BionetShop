@@ -24,43 +24,26 @@ class Spider:
             return items[i]
         return ''
 
-    def get_products_template(self):
-        def products_from_page(document, sections_url):
-            categories = [section.replace('.html', '') for section in sections_url.split('/') if section and
-                          'www.keyorganics.net' not in section and
-                          'https:' not in section]
-            products = [{'webpage': href} for href in document.xpath(".//h2[@class='product-name']/a/@href")]
-            for product in products:
-                for i, category in enumerate(categories):
-                    product['category' + str(i)] = category
-            return products
-
-        products = []
-
-        for url in self.sections:
+    def get_link_on_pages(self):
+        for url in self.sections[:5]:
             print('Scraping section ' + url + ' ' + str(self.counter))
             self.counter += 1
             document = self.navigate(url + '?limit=25')
-            products += products_from_page(document, url)
             pages_num = 1
             if document:
                 total_xpath = "//p[@class='amount amount--has-pages']//text()"
                 total = document.xpath(total_xpath)
                 if not total:
+                    yield [url]
                     continue
                 total = total[-1].split('of')[-1].strip()
                 balance = int(total) % 25
                 pages_num = int(int(total) / 25)
                 if balance:
                     pages_num += 1
-            for i in range(2, pages_num + 1):
-                document = self.navigate(url + '?limit=25&p=' + str(i))
-                products += products_from_page(document, url)
-        self.counter = 0
-        return products
+                    yield list(url + '?p=%s&limit=%s' % (i, 25) for i in range(1, pages_num + 1))
 
-    # NOT SCRAPED - category 3, 4
-    async def fetch(self, product_raw, session):
+    async def fetch_product(self, product_raw, session):
         product = copy.deepcopy(product_raw)
         async with session.get(product['webpage']) as response:
             text = await response.text()
@@ -104,17 +87,17 @@ class Spider:
             self.counter += 1
             return 1
 
-    async def bound_fetch(self, sem, product, session):
+    async def bound_fetch_products(self, sem, product, session):
         async with sem:
-            await self.fetch(product, session)
+            await self.fetch_product(product, session)
 
-    async def run(self, products):
+    async def run_products(self, products):
         tasks = []
         sem = asyncio.Semaphore(10)
 
         async with ClientSession() as session:
             for product in products:
-                task = asyncio.ensure_future(self.bound_fetch(sem, product, session))
+                task = asyncio.ensure_future(self.bound_fetch_products(sem, product, session))
                 tasks.append(task)
 
             responses = asyncio.gather(*tasks)
@@ -122,20 +105,60 @@ class Spider:
 
     def fill_products(self, products):
         loop = asyncio.get_event_loop()
-        future = asyncio.ensure_future(self.run(products))
+        future = asyncio.ensure_future(self.run_products(products))
         try:
             loop.run_until_complete(future)
         except:
             print('Exception')
 
+    async def fetch_search_pages(self, page, session):
+        async with session.get(page) as response:
+            text = await response.text()
+            document = html.fromstring(text)
+            categories = [section.replace('.html', '').split('?')[0] for section in page.split('/') if section and
+                          'www.keyorganics.net' not in section and
+                          'https:' not in section]
+            products = [{'webpage': href} for href in document.xpath(".//h2[@class='product-name']/a/@href")]
+            for product in products:
+                for i, category in enumerate(categories):
+                    product['category' + str(i + 1)] = category
+            return products
+
+    async def bound_fetch_search_pages(self, sem, page, session):
+        async with sem:
+            return await self.fetch_search_pages(page, session)
+
+    async def get_products_from_search_pages(self):
+        import itertools
+        urls = list(itertools.chain(self.get_link_on_pages()))
+
+        tasks = []
+        sem = asyncio.Semaphore(10)
+
+        async with ClientSession() as session:
+            for url in urls:
+                task = asyncio.ensure_future(self.bound_fetch_search_pages(sem, url, session))
+                tasks.append(task)
+
+            responses = asyncio.gather(*tasks)
+            return list(itertools.chain(*await responses))
+
+    def get_products_template(self):
+        loop = asyncio.get_event_loop()
+        future = asyncio.ensure_future(self.get_products_from_search_pages())
+        try:
+            return loop.run_until_complete(future)
+        except:
+            print('Exception')
 
 if __name__ == '__main__':
     spider = Spider()
     #products = spider.get_products_template()
-    products = []
-    with open('products_inter.json', 'r') as fh:
-        products = json.load(fh)
+    products = spider.get_products_template()
+    with open('products_inter.json', 'w') as fh:
+        json.dump(products, fh)
     spider.fill_products(products)
+    pass
 
 
 
