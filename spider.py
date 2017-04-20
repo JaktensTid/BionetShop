@@ -1,4 +1,5 @@
 import json
+import copy
 import requests
 import asyncio
 from aiohttp import ClientSession
@@ -59,10 +60,10 @@ class Spider:
         return products
 
     # NOT SCRAPED - category 3, 4
-    async def fetch(self, product, session):
+    async def fetch(self, product_raw, session):
+        product = copy.deepcopy(product_raw)
         async with session.get(product['webpage']) as response:
             text = await response.text()
-
             if text:
                 document = html.fromstring(text)
                 idcas = document.xpath(".//div[@class='delivery-info']//span[@class='value']/text()")
@@ -101,7 +102,7 @@ class Spider:
             json.dump(product, self.save_handler)
             print('Scraped product ' + product['webpage'] + '. Counter ' + str(self.counter))
             self.counter += 1
-            return product
+            return 1
 
     async def bound_fetch(self, sem, product, session):
         async with sem:
