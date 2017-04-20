@@ -1,16 +1,15 @@
+import json
 import requests
 import asyncio
 from aiohttp import ClientSession
 from lxml import html
 
 class Spider:
-    bionet_shop = 'https://www.keyorganics.net/bionet-shop'
+    save_handler = open('products_result.json', 'w')
+    counter = 0
 
     def __init__(self):
-        document = self.navigate(self.bionet_shop)
-        if document:
-            self.sections = [h for h in document.xpath(".//div[@class='col-left sidebar']//a/@href")
-                             if h != '#']
+        self.sections = open('sections.txt', 'r').read().split('\n')
 
     def navigate(self, url):
         response = requests.get(url)
@@ -18,15 +17,30 @@ class Spider:
             return html.fromstring(response.text)
         return None
 
-    def products_from_page(self, document):
-        return [{'webpage': href} for href in document.xpath(".//h2[@class='product-name']/a/@href")]
+    def xpath(self, element, xpath, i=0):
+        items = element.xpath(xpath)
+        if items:
+            return items[i]
+        return ''
 
-    def get_products_urls(self):
-        urls = []
+    def get_products_template(self):
+        def products_from_page(document, sections_url):
+            categories = [section.replace('.html', '') for section in sections_url.split('/') if section and
+                          'www.keyorganics.net' not in section and
+                          'https:' not in section]
+            products = [{'webpage': href} for href in document.xpath(".//h2[@class='product-name']/a/@href")]
+            for product in products:
+                for i, category in enumerate(categories):
+                    product['category' + str(i)] = category
+            return products
 
-        for section in self.sections:
-            document = self.navigate(section + '?limit=25')
-            urls += self.products_from_page(document)
+        products = []
+
+        for url in self.sections:
+            print('Scraping section ' + url + ' ' + str(self.counter))
+            self.counter += 1
+            document = self.navigate(url + '?limit=25')
+            products += products_from_page(document, url)
             pages_num = 1
             if document:
                 total_xpath = "//p[@class='amount amount--has-pages']//text()"
@@ -39,10 +53,10 @@ class Spider:
                 if balance:
                     pages_num += 1
             for i in range(2, pages_num + 1):
-                document = self.navigate(section + '?limit=25&p=' + str(i))
-                urls += self.products_from_page(document)
-
-        return urls
+                document = self.navigate(url + '?limit=25&p=' + str(i))
+                products += products_from_page(document, url)
+        self.counter = 0
+        return products
 
     # NOT SCRAPED - category 3, 4
     async def fetch(self, product, session):
@@ -51,35 +65,42 @@ class Spider:
 
             if text:
                 document = html.fromstring(text)
-                ID, CAS, _ = document.xpath(".//div[@class='delivery-info']//span[@class='value']/text()")
+                idcas = document.xpath(".//div[@class='delivery-info']//span[@class='value']/text()")
+                ID, CAS = idcas[0], idcas[1]
                 product['id'], product['cas'] = ID, CAS
-                product['name'] = document.xpath(".//span[@class='h1']/text()")
-                product['category1'] = document.xpath(".//li[@class='category9']/a/text()")
-                product['category2'] = document.xpath(".//li[@class='category11']/a/text()")
-                product['availability'] = document.xpath(".//div[@class='stock-info']//span[@class='value']/text()")
-                product['delivery'] = document.xpath(".//div[@class='stock-info']//p[position()=2]/text()")
-                prices = document.xpath(".//div[@class='product-shop']/table//tr/td[position()=3]//text()")
-                packs = document.xpath(".//div[@class='product-shop']/table//tr/td[position()=1]/text()")[0:prices+1]
-                product['packs'] = {k:v for k,v in zip(prices, packs)}
-                table = document.xpath(".//div[@class='product-collateral toggle-content tabs']/table")
-                formula = table.xpath(".//tr/td[contains(.,'Formula')]")
-                product['formula'] = formula.replace('Formula', '')
-                purity = table.xpath(".//tr/td[contains(.,'Purity')]")
-                product['purity'] = purity.replace('Purity', '')
-                supplier = table.xpath(".//tr/td[contains(.,'Supplier Name')]").replace('Supplier Name', '')
-                product['supplier'] = supplier
-                supplierid = table.xpath(".//tr/td[contains(.,'Supplier ID')]").replace('Supplier ID', '')
-                product['supplierid'] = supplierid
-                acdno = table.xpath(".//tr/td[contains(.,'ACD no')]").replace('ACD no', '')
-                product['acd no'] = acdno
-                mw = table.xpath(".//tr/td[contains(.,'MW')]").replace('MW', '')
-                product['mw'] = mw
-                synonym = table.xpath(".//tr/td[contains(.,'Synonym')]").replace('Synonym', '')
-                product['synonym'] = synonym
-                product['img'] = document.xpath(".//img[@id='image-main']/@src")
-                product['related'] = document.xpath(".//ul[@id='upsell-product-table']//span[position()=2]/text()")
+                product['name'] = self.xpath(document, ".//span[@class='h1']/text()")
+                product['availability'] = self.xpath(document, ".//div[@class='stock-info']//span[@class='value']/text()")
+                product['delivery'] = self.xpath(document, ".//div[@class='stock-info']//p[position()=2]/text()")
+                product['packs'] = {}
+                packs = document.xpath(".//div[@class='product-shop']/table//tr")
+                for tr in packs:
+                    try:
+                        volume, price = tr.xpath("./td/span[@class='value']/text()")
+                        product['packs'][volume] = price
+                    except ValueError:
+                        break
+                table = self.xpath(document, ".//div[@class='product-collateral toggle-content tabs']/table")
+                def fromt(xp):
+                    item = table.xpath(xp)
+                    if item: return item[-1] if len(item) == 2 else ''
+                    else: ''
+                product['formula'] = fromt(".//tr/td[contains(.,'Formula')]//text()")
+                product['purity'] = fromt(".//tr/td[contains(.,'Purity')]//text()")
+                product['supplier'] = fromt(".//tr/td[contains(.,'Supplier Name')]//text()")
+                product['supplierid'] = fromt(".//tr/td[contains(.,'Supplier ID')]//text()")
+                product['acd no'] = fromt(".//tr/td[contains(.,'ACD no')]//text()")
+                product['mw'] = fromt(".//tr/td[contains(.,'MW')]//text()")
+                product['synonym'] = fromt(".//tr/td[contains(.,'Synonym')]//text()")
+                product['img'] = self.xpath(document, ".//img[@id='image-main']/@src")
+                related_titles = document.xpath(".//ul[@id='upsell-product-table']/li/a/@title")
+                related_ids = document.xpath(".//ul[@id='upsell-product-table']//span[position()=2]/text()")
+                if not related_ids:
+                    related_ids = list('' for s in range(len(related_titles)))
+                product['related'] = {k:v for k,v in zip(related_titles, related_ids)}
 
-
+            json.dump(product, self.save_handler)
+            print('Scraped product ' + product['webpage'] + '. Counter ' + str(self.counter))
+            self.counter += 1
             return product
 
     async def bound_fetch(self, sem, product, session):
@@ -88,7 +109,7 @@ class Spider:
 
     async def run(self, products):
         tasks = []
-        sem = asyncio.Semaphore(20)
+        sem = asyncio.Semaphore(10)
 
         async with ClientSession() as session:
             for product in products:
@@ -98,13 +119,25 @@ class Spider:
             responses = asyncio.gather(*tasks)
             await responses
 
+    def fill_products(self, products):
+        loop = asyncio.get_event_loop()
+        future = asyncio.ensure_future(self.run(products))
+        try:
+            loop.run_until_complete(future)
+        except:
+            print('Exception')
+
 
 if __name__ == '__main__':
     spider = Spider()
-    products = [{'webpage' : 'https://www.keyorganics.net/biochemicals/research-area/oncology/-34.html'},
-                {'webpage' : 'https://www.keyorganics.net/fragments-screening/screening/-15848.html'}]
-    loop = asyncio.get_event_loop()
+    #products = spider.get_products_template()
+    products = []
+    with open('products_inter.json', 'r') as fh:
+        products = json.load(fh)
+    spider.fill_products(products)
 
-    future = asyncio.ensure_future(spider.run(products))
-    loop.run_until_complete(future)
+
+
+
+
 
