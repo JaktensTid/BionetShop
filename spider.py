@@ -1,12 +1,18 @@
 import json
 import copy
+import csv
 import requests
 import asyncio
 from aiohttp import ClientSession
 from lxml import html
 
+def normalize_to_json(string):
+    return '[' + string.replace('}{','},{') + ']'
+
 class Spider:
-    save_handler = open('products_result.json', 'w')
+    unscraped = []
+    save_handler = open('products_result.json', 'a')
+    save_inter_handler = open('products_inter.json', 'a')
     counter = 0
 
     def __init__(self):
@@ -25,7 +31,7 @@ class Spider:
         return ''
 
     def get_link_on_pages(self):
-        for url in self.sections[:5]:
+        for url in self.sections:
             print('Scraping section ' + url + ' ' + str(self.counter))
             self.counter += 1
             document = self.navigate(url + '?limit=25')
@@ -42,6 +48,7 @@ class Spider:
                 if balance:
                     pages_num += 1
                     yield list(url + '?p=%s&limit=%s' % (i, 25) for i in range(1, pages_num + 1))
+        self.counter = 0
 
     async def fetch_product(self, product_raw, session):
         product = copy.deepcopy(product_raw)
@@ -82,7 +89,8 @@ class Spider:
                     related_ids = list('' for s in range(len(related_titles)))
                 product['related'] = {k:v for k,v in zip(related_titles, related_ids)}
 
-            json.dump(product, self.save_handler)
+            s = json.dumps(product)
+            self.save_handler.write(s)
             print('Scraped product ' + product['webpage'] + '. Counter ' + str(self.counter))
             self.counter += 1
             return 1
@@ -118,20 +126,24 @@ class Spider:
             categories = [section.replace('.html', '').split('?')[0] for section in page.split('/') if section and
                           'www.keyorganics.net' not in section and
                           'https:' not in section]
-            products = [{'webpage': href} for href in document.xpath(".//h2[@class='product-name']/a/@href")]
+            products = [{'root':page,'webpage': href} for href in document.xpath(".//h2[@class='product-name']/a/@href")]
             for product in products:
                 for i, category in enumerate(categories):
                     product['category' + str(i + 1)] = category
-            return products
+            print('Fetched search page: ' + page)
+            s = json.dumps(products)[1:-1]
+            self.save_inter_handler.write(s)
+            return
 
     async def bound_fetch_search_pages(self, sem, page, session):
-        async with sem:
-            return await self.fetch_search_pages(page, session)
+        try:
+            async with sem:
+                await self.fetch_search_pages(page, session)
+        except Exception as e:
+            print('Exception ' + str(e))
+            return page
 
-    async def get_products_from_search_pages(self):
-        import itertools
-        urls = list(itertools.chain(self.get_link_on_pages()))
-
+    async def get_products_from_search_pages(self, urls):
         tasks = []
         sem = asyncio.Semaphore(10)
 
@@ -141,22 +153,27 @@ class Spider:
                 tasks.append(task)
 
             responses = asyncio.gather(*tasks)
-            return list(itertools.chain(*await responses))
+            await responses
 
-    def get_products_template(self):
+    def get_products_template(self, urls):
         loop = asyncio.get_event_loop()
-        future = asyncio.ensure_future(self.get_products_from_search_pages())
-        try:
-            return loop.run_until_complete(future)
-        except:
-            print('Exception')
+        future = asyncio.ensure_future(self.get_products_from_search_pages(urls))
+        loop.run_until_complete(future)
+
 
 if __name__ == '__main__':
     spider = Spider()
-    #products = spider.get_products_template()
-    products = spider.get_products_template()
-    with open('products_inter.json', 'w') as fh:
-        json.dump(products, fh)
+    urls = []
+    # Get pages from sections
+    for pack in spider.get_link_on_pages():
+        urls += pack
+    print(' - - - Total search pages: ' + str(len(urls)))
+    spider.get_products_template(urls)
+    string = ''
+    with open(spider.save_inter_handler, 'r') as file:
+        string = file.read()
+    string = normalize_to_json(string)
+    products = json.loads(string)
     spider.fill_products(products)
     pass
 
