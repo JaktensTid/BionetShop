@@ -96,8 +96,11 @@ class Spider:
             return 1
 
     async def bound_fetch_products(self, sem, product, session):
-        async with sem:
-            await self.fetch_product(product, session)
+        try:
+            async with sem:
+                await self.fetch_product(product, session)
+        except:
+            print('Exception')
 
     async def run_products(self, products):
         tasks = []
@@ -114,10 +117,7 @@ class Spider:
     def fill_products(self, products):
         loop = asyncio.get_event_loop()
         future = asyncio.ensure_future(self.run_products(products))
-        try:
-            loop.run_until_complete(future)
-        except:
-            print('Exception')
+        loop.run_until_complete(future)
 
     async def fetch_search_pages(self, page, session):
         async with session.get(page) as response:
@@ -139,8 +139,8 @@ class Spider:
         try:
             async with sem:
                 await self.fetch_search_pages(page, session)
-        except Exception as e:
-            print('Exception ' + str(e))
+        except:
+            print('Exception')
             return page
 
     async def get_products_from_search_pages(self, urls):
@@ -153,29 +153,29 @@ class Spider:
                 tasks.append(task)
 
             responses = asyncio.gather(*tasks)
-            await responses
+            return await responses
 
     def get_products_template(self, urls):
         loop = asyncio.get_event_loop()
         future = asyncio.ensure_future(self.get_products_from_search_pages(urls))
-        loop.run_until_complete(future)
+        return loop.run_until_complete(future)
 
 
 if __name__ == '__main__':
     spider = Spider()
-    urls = []
+    #urls = []
     # Get pages from sections
-    for pack in spider.get_link_on_pages():
-        urls += pack
-    print(' - - - Total search pages: ' + str(len(urls)))
-    spider.get_products_template(urls)
+    #for pack in spider.get_link_on_pages():
+    #    urls += pack
+    #print(' - - - Total search pages: ' + str(len(urls)))
+    #unscraped = spider.get_products_template(urls)
+    #spider.get_products_template(unscraped)
     string = ''
-    with open(spider.save_inter_handler, 'r') as file:
-        string = file.read()
-    string = normalize_to_json(string)
+    # Normalize and get products templates from file
+    with open('products_inter.json', 'r') as file:
+        string = normalize_to_json(file.read())
     products = json.loads(string)
     spider.fill_products(products)
-    pass
 
 
 
