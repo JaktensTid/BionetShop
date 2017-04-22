@@ -3,11 +3,12 @@ import copy
 import csv
 import requests
 import asyncio
+from asyncio import TimeoutError
 from aiohttp import ClientSession
 from lxml import html
 
 def normalize_to_json(string):
-    return '[' + string.replace('}{','},{') + ']'
+    return '[' + string.replace('}{', '},{') + ']'
 
 class Spider:
     unscraped = []
@@ -52,7 +53,7 @@ class Spider:
 
     async def fetch_product(self, product_raw, session):
         product = copy.deepcopy(product_raw)
-        async with session.get(product['webpage']) as response:
+        async with session.get(product['webpage'], timeout=60) as response:
             text = await response.text()
             if text:
                 document = html.fromstring(text)
@@ -96,11 +97,13 @@ class Spider:
             return 1
 
     async def bound_fetch_products(self, sem, product, session):
-        try:
-            async with sem:
-                await self.fetch_product(product, session)
-        except:
-            print('Exception')
+        async with sem:
+            for i in range(3):
+                try:
+                    await self.fetch_product(product, session)
+                    break
+                except TimeoutError:
+                    print('Timeout error at ' + product['webpage'])
 
     async def run_products(self, products):
         tasks = []
@@ -120,7 +123,7 @@ class Spider:
         loop.run_until_complete(future)
 
     async def fetch_search_pages(self, page, session):
-        async with session.get(page) as response:
+        async with session.get(page, timeout=60) as response:
             text = await response.text()
             document = html.fromstring(text)
             categories = [section.replace('.html', '').split('?')[0] for section in page.split('/') if section and
@@ -136,12 +139,13 @@ class Spider:
             return
 
     async def bound_fetch_search_pages(self, sem, page, session):
-        try:
-            async with sem:
-                await self.fetch_search_pages(page, session)
-        except:
-            print('Exception')
-            return page
+        async with sem:
+            for i in range(3):
+                try:
+                    await self.fetch_search_pages(page, session)
+                    break
+                except:
+                    print('Timeout error at ' + page)
 
     async def get_products_from_search_pages(self, urls):
         tasks = []
@@ -153,31 +157,45 @@ class Spider:
                 tasks.append(task)
 
             responses = asyncio.gather(*tasks)
-            return await responses
+            await responses
 
     def get_products_template(self, urls):
         loop = asyncio.get_event_loop()
         future = asyncio.ensure_future(self.get_products_from_search_pages(urls))
-        return loop.run_until_complete(future)
+        loop.run_until_complete(future)
+
+
+    def main():
+        spider = Spider()
+        urls = []
+        # Get pages from sections
+        for pack in spider.get_link_on_pages():
+            urls += pack
+        print(' - - - Total search pages: ' + str(len(urls)))
+        spider.get_products_template(urls)
+        string = ''
+        # Normalize and get products templates from file
+        with open('products_inter.json', 'r') as file:
+            string = normalize_to_json(file.read())
+        products = json.loads(string)
+        del string
+        spider.fill_products(products)
 
 
 if __name__ == '__main__':
+    #main()
     spider = Spider()
-    #urls = []
-    # Get pages from sections
-    #for pack in spider.get_link_on_pages():
-    #    urls += pack
-    #print(' - - - Total search pages: ' + str(len(urls)))
-    #unscraped = spider.get_products_template(urls)
-    #spider.get_products_template(unscraped)
-    string = ''
-    # Normalize and get products templates from file
-    with open('products_inter.json', 'r') as file:
-        string = normalize_to_json(file.read())
-    products = json.loads(string)
-    del string
+    with open('products_inter.json', 'r') as inter:
+        s1 = inter.read()
+    with open('products_result.json', 'r') as result:
+        s2 = result.read()
+        scraped_urls = [product['webpage'] for product in json.loads(normalize_to_json(s2))]
+    print('Len scraped ' + str(len(scraped_urls)))
+    s1 = normalize_to_json(s1)
+    products = [product for product in json.loads(s1) if product['webpage'] not in scraped_urls]
+    print('Len unscraped ' + str(len(products)))
+    print('Started')
     spider.fill_products(products)
-
 
 
 
