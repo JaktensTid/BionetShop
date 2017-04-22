@@ -165,37 +165,98 @@ class Spider:
         loop.run_until_complete(future)
 
 
-    def main():
-        spider = Spider()
-        urls = []
-        # Get pages from sections
-        for pack in spider.get_link_on_pages():
-            urls += pack
-        print(' - - - Total search pages: ' + str(len(urls)))
-        spider.get_products_template(urls)
-        string = ''
-        # Normalize and get products templates from file
-        with open('products_inter.json', 'r') as file:
-            string = normalize_to_json(file.read())
-        products = json.loads(string)
-        del string
-        spider.fill_products(products)
+def fill_csv(products):
+    def get_main_product_array(product_raw):
+        product_array = []
+        for key, value in product_raw['packs'].items():
+            product = dict(product_raw)
+            if 'category3' not in product:
+                product['category3'] = ''
+            if 'category4' not in product:
+                product['category4'] = ''
+            product['ID'] = product['id'] + '-' + key.upper()
+            product['Price'] = '$' + "%.2f" % (float(value[1:].replace(',', '')) * 1.07265 * 1.007046)
+            del product['packs']
+            del product['id']
+            del product['related']
+            for pkey, pvalue in product.items():
+                product[pkey] = pvalue.strip()
+                if product[pkey] == 'N/A': product[pkey] = ''
+            product_array.append(product)
+        return product_array
+
+    def get_related_size_product_array(product_raw):
+        for key, value in product_raw['packs'].items():
+            product = {}
+            product['ID'] = product_raw['id'] + '-' + key.upper()
+
+            for pkey, pvalue in product_raw['packs'].items():
+                if pkey != key:
+                    if key[-2:] == 'mg' and pkey[-2:] == 'mg':
+                        if float(pkey.replace('mg', '')) % float(key.replace('mg', '')) == 0:
+                            product['Related ID'] = product_raw['id'] + '-' + pkey.upper()
+                            if product['ID'] != product['Related ID']: yield product
+                    if key[-2:] != 'mg' and key[-1:] == 'g' and pkey[-2:] != 'mg' and pkey[-1:] == 'g':
+                        if float(pkey.replace('g', '')) % float(key.replace('g', '')) == 0:
+                            product['Related ID'] = product_raw['id'] + '-' + pkey.upper()
+                            if product['ID'] != product['Related ID']: yield product
+
+    def get_related_products(product_raw):
+        for key, value in product_raw['related'].items():
+            product = {}
+            product['ID'] = product_raw['id']
+            product['Related name'] = key
+            product['Related ID'] = value
+            yield product
+
+
+    product_template = products[90000]
+    product_array1 = get_main_product_array(product_template)
+
+    with open('main_template.csv', 'w') as result_fh:
+        writer = csv.DictWriter(result_fh, fieldnames=[key for key,value in product_array1[0].items()])
+        writer.writeheader()
+        for product in products:
+            writer.writerows(get_main_product_array(product))
+
+    with open('related_sizes.csv', 'w') as result_fh:
+        writer = csv.DictWriter(result_fh, fieldnames=['ID', 'Related ID'])
+        writer.writeheader()
+        for product in products:
+            for p_new in get_related_size_product_array(product):
+                writer.writerow(p_new)
+
+    with open('related_products.csv', 'w') as result_fh:
+        writer = csv.DictWriter(result_fh, fieldnames=['ID', 'Related name', 'Related ID'])
+        writer.writeheader()
+        for product in products:
+            for p_new in get_related_products(product):
+                writer.writerow(p_new)
+
+
+
+def main():
+    spider = Spider()
+    urls = []
+    # Get pages from sections
+    for pack in spider.get_link_on_pages():
+        urls += pack
+    print(' - - - Total search pages: ' + str(len(urls)))
+    spider.get_products_template(urls)
+    # Normalize and get products templates from file
+    with open('products_inter.json', 'r') as file:
+        string = normalize_to_json(file.read())
+    products = json.loads(string)
+    del string
+    spider.fill_products(products)
+    del products
+    with open('products_result.json', 'r') as result_fh:
+        string = result_fh.read()
+        fill_csv(json.loads(normalize_to_json(string)))
 
 
 if __name__ == '__main__':
-    #main()
-    spider = Spider()
-    with open('products_inter.json', 'r') as inter:
-        s1 = inter.read()
-    with open('products_result.json', 'r') as result:
-        s2 = result.read()
-        scraped_urls = [product['webpage'] for product in json.loads(normalize_to_json(s2))]
-    print('Len scraped ' + str(len(scraped_urls)))
-    s1 = normalize_to_json(s1)
-    products = [product for product in json.loads(s1) if product['webpage'] not in scraped_urls]
-    print('Len unscraped ' + str(len(products)))
-    print('Started')
-    spider.fill_products(products)
+    main()
 
 
 
