@@ -175,6 +175,7 @@ if __name__ == '__main__':
     with open('products_inter.json', 'r') as file:
         string = normalize_to_json(file.read())
     products = json.loads(string)
+    del string
     spider.fill_products(products)
 
 
